@@ -22,15 +22,47 @@ const CATEGORY_LABELS: Record<DisasterCategory, string> = {
 };
 
 function ReportMarkerInner({ report }: ReportMarkerProps) {
+  const [tracksViewChanges, setTracksViewChanges] = React.useState(true);
   const pinColor = CATEGORY_COLORS[report.category];
+
+  // Stop tracking view changes after the initial render snapshot to prevent excessive map re-renders
+  React.useEffect(() => {
+    if (tracksViewChanges) {
+      const timer = setTimeout(() => {
+        setTracksViewChanges(false);
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [tracksViewChanges]);
+
+  // Re-enable tracking briefly if visual report data updates
+  const prevReportRef = React.useRef(report);
+  React.useEffect(() => {
+    if (
+      prevReportRef.current.category !== report.category ||
+      prevReportRef.current.title !== report.title ||
+      prevReportRef.current.severity !== report.severity ||
+      prevReportRef.current.coordinates.latitude !== report.coordinates.latitude ||
+      prevReportRef.current.coordinates.longitude !== report.coordinates.longitude
+    ) {
+      prevReportRef.current = report;
+      setTracksViewChanges(true);
+    }
+  }, [report]);
+
+  const bubbleStyle = React.useMemo(
+    () => [styles.markerBubble, { backgroundColor: pinColor }],
+    [pinColor],
+  );
 
   return (
     <Marker
+      identifier={report.id}
       coordinate={report.coordinates}
       pinColor={pinColor}
-      tracksViewChanges={false}
+      tracksViewChanges={tracksViewChanges}
     >
-      <View style={[styles.markerBubble, { backgroundColor: pinColor }]}>
+      <View style={bubbleStyle}>
         <Text style={styles.markerEmoji}>
           {CATEGORY_LABELS[report.category]}
         </Text>

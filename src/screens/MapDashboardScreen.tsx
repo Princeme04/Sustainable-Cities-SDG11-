@@ -1,4 +1,4 @@
-import React, { useMemo, useCallback, useRef } from 'react';
+import React, { useMemo, useCallback, useRef, useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Circle, Region } from 'react-native-maps';
@@ -63,17 +63,22 @@ export default function MapDashboardScreen() {
   const hazardZones = useCivicStore((s) => s.hazardZones);
 
   const mapRef = useRef<MapView>(null);
+  const userLocationRef = useRef(userLocation);
+  userLocationRef.current = userLocation;
+  const hasAnimatedToUserRef = useRef(false);
 
   const mapCenter = userLocation ?? MALANG_FALLBACK;
 
+  // Stable initial region computed once on mount to prevent MapView prop churn
   const initialRegion: Region = useMemo(
     () => ({
-      latitude: mapCenter.latitude,
-      longitude: mapCenter.longitude,
+      latitude: (userLocation ?? MALANG_FALLBACK).latitude,
+      longitude: (userLocation ?? MALANG_FALLBACK).longitude,
       latitudeDelta: DEFAULT_DELTA,
       longitudeDelta: DEFAULT_DELTA,
     }),
-    [mapCenter.latitude, mapCenter.longitude],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
 
   const nearestResult = useMemo(
@@ -81,8 +86,23 @@ export default function MapDashboardScreen() {
     [mapCenter.latitude, mapCenter.longitude, reports],
   );
 
+  // Stable onMapReady callback to prevent passing new references on every render
   const handleMapReady = useCallback(() => {
-    if (userLocation && mapRef.current) {
+    if (userLocationRef.current && !hasAnimatedToUserRef.current && mapRef.current) {
+      hasAnimatedToUserRef.current = true;
+      mapRef.current.animateToRegion({
+        latitude: userLocationRef.current.latitude,
+        longitude: userLocationRef.current.longitude,
+        latitudeDelta: DEFAULT_DELTA,
+        longitudeDelta: DEFAULT_DELTA,
+      });
+    }
+  }, []);
+
+  // Animate once when user location becomes available after map is mounted
+  useEffect(() => {
+    if (userLocation && !hasAnimatedToUserRef.current && mapRef.current) {
+      hasAnimatedToUserRef.current = true;
       mapRef.current.animateToRegion({
         latitude: userLocation.latitude,
         longitude: userLocation.longitude,
@@ -91,6 +111,28 @@ export default function MapDashboardScreen() {
       });
     }
   }, [userLocation]);
+
+  // Memoize hazard zone circles to avoid recreating native elements on map renders
+  const renderedHazardZones = useMemo(
+    () =>
+      hazardZones.map((zone) => (
+        <Circle
+          key={zone.id}
+          center={zone.center}
+          radius={zone.radiusMeters}
+          fillColor={RISK_LEVEL_COLORS[zone.riskLevel]}
+          strokeColor={RISK_LEVEL_STROKE_COLORS[zone.riskLevel]}
+          strokeWidth={2}
+        />
+      )),
+    [hazardZones],
+  );
+
+  // Memoize report markers to prevent re-instantiating marker components when user location moves
+  const renderedMarkers = useMemo(
+    () => reports.map((report) => <ReportMarker key={report.id} report={report} />),
+    [reports],
+  );
 
   const isPermissionDenied =
     permissionStatus === 'denied' || permissionStatus === 'restricted';
@@ -121,20 +163,8 @@ export default function MapDashboardScreen() {
           showsMyLocationButton
           onMapReady={handleMapReady}
         >
-          {hazardZones.map((zone) => (
-            <Circle
-              key={zone.id}
-              center={zone.center}
-              radius={zone.radiusMeters}
-              fillColor={RISK_LEVEL_COLORS[zone.riskLevel]}
-              strokeColor={RISK_LEVEL_STROKE_COLORS[zone.riskLevel]}
-              strokeWidth={2}
-            />
-          ))}
-
-          {reports.map((report) => (
-            <ReportMarker key={report.id} report={report} />
-          ))}
+          {renderedHazardZones}
+          {renderedMarkers}
         </MapView>
 
         {nearestResult && (
