@@ -4,7 +4,19 @@ import type {
   Coordinates,
   HazardZone,
   PermissionStatus,
+  ReporterIdentity,
 } from '../types/civic';
+import {
+  getReporterIdentity,
+  saveReporterCredentials,
+  clearSecurityVault,
+} from '../services/security/secureVaultService';
+
+const ONE_HOUR_MS = 3_600_000;
+const TWO_HOURS_MS = 7_200_000;
+const THREE_HOURS_MS = 10_800_000;
+const HALF_HOUR_MS = 1_800_000;
+const NINETY_MINUTES_MS = 5_400_000;
 
 // Realistic mock reports around Malang, East Java, Indonesia
 const MOCK_REPORTS: CivicReport[] = [
@@ -14,8 +26,14 @@ const MOCK_REPORTS: CivicReport[] = [
     category: 'FLOOD',
     severity: 'HIGH',
     coordinates: { latitude: -7.9725, longitude: 112.6311 },
-    timestamp: Date.now() - 3_600_000,
+    timestamp: Date.now() - ONE_HOUR_MS,
     photoUri: null,
+    syncStatus: 'SYNCED',
+    watermarkMetadata: {
+      capturedAt: new Date(Date.now() - ONE_HOUR_MS).toISOString(),
+      gpsAccuracy: 3.5,
+      coordinates: { latitude: -7.9725, longitude: 112.6311 },
+    },
   },
   {
     id: 'rpt-002',
@@ -23,8 +41,14 @@ const MOCK_REPORTS: CivicReport[] = [
     category: 'ROAD_DAMAGE',
     severity: 'MEDIUM',
     coordinates: { latitude: -7.9455, longitude: 112.6155 },
-    timestamp: Date.now() - 7_200_000,
+    timestamp: Date.now() - TWO_HOURS_MS,
     photoUri: null,
+    syncStatus: 'SYNCED',
+    watermarkMetadata: {
+      capturedAt: new Date(Date.now() - TWO_HOURS_MS).toISOString(),
+      gpsAccuracy: 4.1,
+      coordinates: { latitude: -7.9455, longitude: 112.6155 },
+    },
   },
   {
     id: 'rpt-003',
@@ -32,8 +56,14 @@ const MOCK_REPORTS: CivicReport[] = [
     category: 'FALLEN_TREE',
     severity: 'CRITICAL',
     coordinates: { latitude: -7.9784, longitude: 112.6320 },
-    timestamp: Date.now() - 1_800_000,
+    timestamp: Date.now() - HALF_HOUR_MS,
     photoUri: null,
+    syncStatus: 'SYNCED',
+    watermarkMetadata: {
+      capturedAt: new Date(Date.now() - HALF_HOUR_MS).toISOString(),
+      gpsAccuracy: 2.8,
+      coordinates: { latitude: -7.9784, longitude: 112.6320 },
+    },
   },
   {
     id: 'rpt-004',
@@ -41,8 +71,14 @@ const MOCK_REPORTS: CivicReport[] = [
     category: 'LANDSLIDE',
     severity: 'HIGH',
     coordinates: { latitude: -7.8830, longitude: 112.5260 },
-    timestamp: Date.now() - 10_800_000,
+    timestamp: Date.now() - THREE_HOURS_MS,
     photoUri: null,
+    syncStatus: 'SYNCED',
+    watermarkMetadata: {
+      capturedAt: new Date(Date.now() - THREE_HOURS_MS).toISOString(),
+      gpsAccuracy: 5.0,
+      coordinates: { latitude: -7.8830, longitude: 112.5260 },
+    },
   },
   {
     id: 'rpt-005',
@@ -50,8 +86,14 @@ const MOCK_REPORTS: CivicReport[] = [
     category: 'ROAD_DAMAGE',
     severity: 'LOW',
     coordinates: { latitude: -7.9636, longitude: 112.6150 },
-    timestamp: Date.now() - 5_400_000,
+    timestamp: Date.now() - NINETY_MINUTES_MS,
     photoUri: null,
+    syncStatus: 'SYNCED',
+    watermarkMetadata: {
+      capturedAt: new Date(Date.now() - NINETY_MINUTES_MS).toISOString(),
+      gpsAccuracy: 3.9,
+      coordinates: { latitude: -7.9636, longitude: 112.6150 },
+    },
   },
 ];
 
@@ -77,21 +119,35 @@ interface CivicState {
   locationPermissionStatus: PermissionStatus;
   reports: CivicReport[];
   hazardZones: HazardZone[];
+  reporterIdentity: ReporterIdentity | null;
+  isVaultUnlocked: boolean;
+  isOfflineMode: boolean;
+  pendingSyncQueue: CivicReport[];
 }
 
 interface CivicActions {
   setUserLocation: (location: Coordinates) => void;
   setPermissionStatus: (status: PermissionStatus) => void;
   addReport: (report: CivicReport) => void;
+  hydrateIdentityFromVault: () => Promise<void>;
+  registerReporterSession: (identity: ReporterIdentity, rawNik: string) => Promise<void>;
+  logoutAndPurgeVault: () => Promise<void>;
+  enqueueOfflineReport: (report: CivicReport) => void;
+  markReportSynced: (reportId: string) => void;
+  setOfflineMode: (status: boolean) => void;
 }
 
-type CivicStore = CivicState & CivicActions;
+export type CivicStore = CivicState & CivicActions;
 
 export const useCivicStore = create<CivicStore>((set) => ({
   userLocation: null,
   locationPermissionStatus: 'undetermined',
   reports: MOCK_REPORTS,
   hazardZones: MOCK_HAZARD_ZONES,
+  reporterIdentity: null,
+  isVaultUnlocked: false,
+  isOfflineMode: false,
+  pendingSyncQueue: [],
 
   setUserLocation: (location) =>
     set({ userLocation: location }),
@@ -101,4 +157,87 @@ export const useCivicStore = create<CivicStore>((set) => ({
 
   addReport: (report) =>
     set((state) => ({ reports: [...state.reports, report] })),
+
+  hydrateIdentityFromVault: async () => {
+    try {
+      const identity = await getReporterIdentity();
+      set({
+        reporterIdentity: identity,
+        isVaultUnlocked: identity !== null,
+      });
+    } catch {
+      set({
+        reporterIdentity: null,
+        isVaultUnlocked: false,
+      });
+    }
+  },
+
+  registerReporterSession: async (identity, rawNik) => {
+    await saveReporterCredentials(identity, rawNik);
+    set({
+      reporterIdentity: identity,
+      isVaultUnlocked: true,
+    });
+  },
+
+  logoutAndPurgeVault: async () => {
+    await clearSecurityVault();
+    set({
+      reporterIdentity: null,
+      isVaultUnlocked: false,
+    });
+  },
+
+  enqueueOfflineReport: (report) => {
+    const offlineReport: CivicReport = {
+      ...report,
+      syncStatus: 'PENDING_UPLOAD',
+    };
+    set((state) => ({
+      reports: [...state.reports, offlineReport],
+      pendingSyncQueue: [...state.pendingSyncQueue, offlineReport],
+    }));
+  },
+
+  markReportSynced: (reportId) =>
+    set((state) => ({
+      reports: state.reports.map((report) =>
+        report.id === reportId ? { ...report, syncStatus: 'SYNCED' } : report,
+      ),
+      pendingSyncQueue: state.pendingSyncQueue.filter(
+        (report) => report.id !== reportId,
+      ),
+    })),
+
+  setOfflineMode: (status) =>
+    set({ isOfflineMode: status }),
 }));
+
+// Precision selectors to prevent unnecessary component re-renders (16ms Mandate)
+export const usePendingSyncCount = () =>
+  useCivicStore((state) => state.pendingSyncQueue.length);
+
+export const useReporterIdentity = () =>
+  useCivicStore((state) => state.reporterIdentity);
+
+export const useIsVaultUnlocked = () =>
+  useCivicStore((state) => state.isVaultUnlocked);
+
+export const useIsOfflineMode = () =>
+  useCivicStore((state) => state.isOfflineMode);
+
+export const useOfflineReports = () =>
+  useCivicStore((state) => state.pendingSyncQueue);
+
+export const useUserLocation = () =>
+  useCivicStore((state) => state.userLocation);
+
+export const useLocationPermissionStatus = () =>
+  useCivicStore((state) => state.locationPermissionStatus);
+
+export const useCivicReports = () =>
+  useCivicStore((state) => state.reports);
+
+export const useHazardZones = () =>
+  useCivicStore((state) => state.hazardZones);
