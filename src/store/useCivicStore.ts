@@ -118,6 +118,7 @@ interface CivicState {
   userLocation: Coordinates | null;
   locationPermissionStatus: PermissionStatus;
   reports: CivicReport[];
+  reportsConnection: 'connecting' | 'live' | 'offline';
   hazardZones: HazardZone[];
   reporterIdentity: ReporterIdentity | null;
   isVaultUnlocked: boolean;
@@ -135,6 +136,7 @@ interface CivicActions {
   enqueueOfflineReport: (report: CivicReport) => void;
   markReportSynced: (reportId: string) => void;
   setOfflineMode: (status: boolean) => void;
+  setReportsConnection: (status: CivicState['reportsConnection']) => void;
 }
 
 export type CivicStore = CivicState & CivicActions;
@@ -143,6 +145,7 @@ export const useCivicStore = create<CivicStore>((set) => ({
   userLocation: null,
   locationPermissionStatus: 'undetermined',
   reports: MOCK_REPORTS,
+  reportsConnection: 'offline',
   hazardZones: MOCK_HAZARD_ZONES,
   reporterIdentity: null,
   isVaultUnlocked: false,
@@ -156,7 +159,7 @@ export const useCivicStore = create<CivicStore>((set) => ({
     set({ locationPermissionStatus: status }),
 
   addReport: (report) =>
-    set((state) => ({ reports: [...state.reports, report] })),
+    set((state) => ({ reports: [...state.reports.filter((item) => item.id !== report.id), report] })),
 
   hydrateIdentityFromVault: async () => {
     try {
@@ -212,6 +215,8 @@ export const useCivicStore = create<CivicStore>((set) => ({
 
   setOfflineMode: (status) =>
     set({ isOfflineMode: status }),
+
+  setReportsConnection: (status) => set({ reportsConnection: status }),
 }));
 
 // Precision selectors to prevent unnecessary component re-renders (16ms Mandate)

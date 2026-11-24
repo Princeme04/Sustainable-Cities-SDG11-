@@ -1,15 +1,16 @@
-import React, { useMemo, useCallback, useRef, useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React, { useMemo, useCallback, useEffect, useRef, useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import MapView, { Circle, Region } from 'react-native-maps';
 import { useCivicStore } from '../store/useCivicStore';
-import { useLocationTracking } from '../hooks/useLocationTracking';
+import { requestLocationForMap } from '../hooks/useLocationTracking';
 import { calculateHaversineDistance } from '../utils/spatial';
 import { ReportMarker } from '../components/map/ReportMarker';
-import { MapLoadingSkeleton } from '../components/map/MapLoadingSkeleton';
 import { PermissionDeniedBanner } from '../components/map/PermissionDeniedBanner';
 import { NearestReportHUD } from '../components/map/NearestReportHUD';
 import type { Coordinates, CivicReport, RiskLevel } from '../types/civic';
+import { reportSearch } from '../services/reportSearch';
+import { connectRealtimeReports } from '../services/realtimeReports';
 
 const MALANG_FALLBACK: Coordinates = {
   latitude: -7.9666,
@@ -55,12 +56,31 @@ function findNearestReport(
 }
 
 export default function MapDashboardScreen() {
-  useLocationTracking();
-
   const userLocation = useCivicStore((s) => s.userLocation);
   const permissionStatus = useCivicStore((s) => s.locationPermissionStatus);
   const reports = useCivicStore((s) => s.reports);
+  const reportsConnection = useCivicStore((s) => s.reportsConnection);
+  const addReport = useCivicStore((s) => s.addReport);
+  const setReportsConnection = useCivicStore((s) => s.setReportsConnection);
   const hazardZones = useCivicStore((s) => s.hazardZones);
+  const [searchText, setSearchText] = useState('');
+  const [category, setCategory] = useState('ALL');
+  const [filteredReports, setFilteredReports] = useState(reports);
+
+  useEffect(() => {
+    reportSearch.publishReports(reports);
+  }, [reports]);
+
+  useEffect(() => {
+    reportSearch.publishQuery({ text: searchText, category });
+  }, [searchText, category]);
+
+  useEffect(() => reportSearch.subscribe(setFilteredReports), []);
+
+  useEffect(() => connectRealtimeReports(
+    (report) => addReport(report),
+    (status) => setReportsConnection(status),
+  ), [addReport, setReportsConnection]);
 
   const mapRef = useRef<MapView>(null);
   const userLocationRef = useRef(userLocation);
@@ -83,7 +103,7 @@ export default function MapDashboardScreen() {
 
   const nearestResult = useMemo(
     () => findNearestReport(mapCenter, reports),
-    [mapCenter.latitude, mapCenter.longitude, reports],
+    [mapCenter, reports],
   );
 
   // Stable onMapReady callback to prevent passing new references on every render
@@ -130,26 +150,36 @@ export default function MapDashboardScreen() {
 
   // Memoize report markers to prevent re-instantiating marker components when user location moves
   const renderedMarkers = useMemo(
-    () => reports.map((report) => <ReportMarker key={report.id} report={report} />),
-    [reports],
+    () => filteredReports.map((report) => <ReportMarker key={report.id} report={report} />),
+    [filteredReports],
   );
 
   const isPermissionDenied =
     permissionStatus === 'denied' || permissionStatus === 'restricted';
 
-  const isAcquiringLock =
-    permissionStatus === 'undetermined' && userLocation === null;
-
-  if (isAcquiringLock) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <MapLoadingSkeleton />
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container}>
+      <View style={styles.searchPanel}>
+        <TextInput value={searchText} onChangeText={setSearchText} placeholder="Cari laporan" style={styles.searchInput} returnKeyType="search" />
+        <View style={styles.filterRow}>
+          {['ALL', 'FLOOD', 'ROAD_DAMAGE', 'FALLEN_TREE', 'LANDSLIDE'].map((value) => (
+            <Pressable key={value} onPress={() => setCategory(value)} style={[styles.filterChip, category === value && styles.filterChipActive]}>
+              <Text style={[styles.filterText, category === value && styles.filterTextActive]}>{value === 'ALL' ? 'Semua' : value.replace('_', ' ')}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.connectionText}>{reportsConnection === 'live' ? '● Live' : reportsConnection === 'connecting' ? '◌ Menghubungkan… · laporan tersimpan tetap tersedia' : '○ Offline · menampilkan laporan tersimpan'}</Text>
+      </View>
+      {permissionStatus === 'undetermined' && userLocation === null && (
+        <View style={styles.locationPrompt}>
+          <Text style={styles.promptTitle}>Gunakan lokasi Anda?</Text>
+          <Text style={styles.promptBody}>Lokasi membantu memusatkan peta dan menghitung laporan terdekat.</Text>
+          <Pressable accessibilityRole="button" onPress={() => void requestLocationForMap()} style={styles.locationButton}>
+            <Text style={styles.locationButtonText}>Aktifkan lokasi</Text>
+          </Pressable>
+          <Text style={styles.fallbackText}>Peta tetap tersedia tanpa lokasi.</Text>
+        </View>
+      )}
       {isPermissionDenied && (
         <PermissionDeniedBanner status={permissionStatus as 'denied' | 'restricted'} />
       )}
@@ -189,4 +219,18 @@ const styles = StyleSheet.create({
   map: {
     flex: 1,
   },
+  locationPrompt: { backgroundColor: '#FFFFFF', margin: 14, padding: 16, borderRadius: 16, borderWidth: 1, borderColor: '#E2E8F0' },
+  searchPanel: { paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E2E8F0' },
+  searchInput: { height: 42, borderWidth: 1, borderColor: '#CBD5E1', borderRadius: 12, paddingHorizontal: 12, color: '#0F172A', backgroundColor: '#F8FAFC' },
+  filterRow: { flexDirection: 'row', gap: 6, paddingVertical: 8, flexWrap: 'wrap' },
+  filterChip: { backgroundColor: '#F1F5F9', borderRadius: 14, paddingHorizontal: 9, paddingVertical: 6 },
+  filterChipActive: { backgroundColor: '#CCFBF1' },
+  filterText: { color: '#64748B', fontSize: 10, fontWeight: '700' },
+  filterTextActive: { color: '#0F766E' },
+  connectionText: { color: '#64748B', fontSize: 11, marginTop: 2 },
+  promptTitle: { color: '#0F172A', fontSize: 16, fontWeight: '700' },
+  promptBody: { color: '#64748B', fontSize: 13, lineHeight: 19, marginTop: 5 },
+  locationButton: { backgroundColor: '#0F766E', height: 42, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginTop: 12 },
+  locationButtonText: { color: '#FFFFFF', fontWeight: '700' },
+  fallbackText: { color: '#64748B', fontSize: 12, marginTop: 8, textAlign: 'center' },
 });

@@ -4,6 +4,11 @@
     "slug": "Sustainable-Cities-SDG11-",
     "version": "1.0.0",
     "orientation": "portrait",
+    "plugins": [
+      ["expo-secure-store", { "faceIDPermission": "Permitir o Sustainable Cities salvar credenciais com segurança." }],
+      ["expo-camera", { "cameraPermission": "Permitir o Sustainable Cities tirar fotos para relatórios cívicos.", "microphonePermission": "Microfone não é necessário para relatórios fotográficos.", "recordAudioAndroid": false }],
+      ["expo-location", { "locationWhenInUsePermission": "Permitir o Sustainable Cities mostrar sua localização no mapa enquanto o app é usado." }]
+    ],
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
@@ -21,8 +26,5 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-secure-store"
-    ]
   }
 }
