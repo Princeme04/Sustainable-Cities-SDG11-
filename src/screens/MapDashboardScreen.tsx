@@ -84,8 +84,11 @@ export default function MapDashboardScreen() {
 
   const mapRef = useRef<MapView>(null);
   const userLocationRef = useRef(userLocation);
-  userLocationRef.current = userLocation;
   const hasAnimatedToUserRef = useRef(false);
+
+  useEffect(() => {
+    userLocationRef.current = userLocation;
+  }, [userLocation]);
 
   const mapCenter = userLocation ?? MALANG_FALLBACK;
 
@@ -168,7 +171,15 @@ export default function MapDashboardScreen() {
             </Pressable>
           ))}
         </View>
-        <Text style={styles.connectionText}>{reportsConnection === 'live' ? '● Live' : reportsConnection === 'connecting' ? '◌ Menghubungkan… · laporan tersimpan tetap tersedia' : '○ Offline · menampilkan laporan tersimpan'}</Text>
+        <Text style={styles.connectionText}>
+          {reportsConnection === 'live'
+            ? '● Live WebSocket'
+            : reportsConnection === 'simulated'
+              ? '● Live Stream (Simulasi Real-Time)'
+              : reportsConnection === 'connecting'
+                ? '◌ Menghubungkan… · laporan tersimpan tetap tersedia'
+                : '○ Offline · menampilkan laporan tersimpan'}
+        </Text>
       </View>
       {permissionStatus === 'undetermined' && userLocation === null && (
         <View style={styles.locationPrompt}>

@@ -71,8 +71,16 @@ export function useSecureIdentity() {
   }, [hydrateIdentityFromVault]);
 
   useEffect(() => {
-    hydrateVault();
-  }, [hydrateVault]);
+    let isMounted = true;
+    hydrateIdentityFromVault().catch(() => {
+      if (isMounted) {
+        setError('Unable to unlock secure vault on this device.');
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [hydrateIdentityFromVault]);
 
   const registerIdentity = useCallback(
     async (fullName: string, rawNik: string): Promise<boolean> => {

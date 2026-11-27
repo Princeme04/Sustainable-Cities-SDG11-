@@ -14,7 +14,11 @@ export type DisasterCategory =
   | 'FALLEN_TREE'
   | 'LANDSLIDE';
 
+export type ReportCategoryFilter = 'ALL' | DisasterCategory;
+
 export type SeverityLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export type SeverityFilter = 'ALL' | SeverityLevel;
 
 export type RiskLevel = 'MODERATE' | 'HIGH' | 'EXTREME';
 
@@ -25,6 +29,12 @@ export type PermissionStatus =
   | 'restricted';
 
 export type SyncStatus = 'SYNCED' | 'PENDING_UPLOAD' | 'FAILED';
+
+export type RealtimeConnectionStatus =
+  | 'connecting'
+  | 'live'
+  | 'simulated'
+  | 'offline';
 
 export interface WatermarkMetadata {
   capturedAt: string;
@@ -59,4 +69,18 @@ export interface ReporterIdentity {
   nikMasked: string;
   authToken: string;
   verifiedAt: string;
+}
+
+export interface RealtimeReportEvent {
+  type: 'report' | 'heartbeat';
+  report?: CivicReport;
+  source: 'websocket' | 'simulation' | 'offline_cache';
+  receivedAt: number;
+}
+
+export interface SyncBatchSummary {
+  syncedIds: string[];
+  failedIds: string[];
+  remainingCount: number;
+  completedAt: number;
 }

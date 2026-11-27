@@ -86,7 +86,7 @@ export async function saveReporterCredentials(
         SECURE_STORE_OPTIONS,
       ),
     ]);
-  } catch (error) {
+  } catch {
     throw new SecurityVaultError('Failed to encrypt and persist credentials to secure vault.');
   }
 }
@@ -115,7 +115,7 @@ export async function getReporterIdentity(): Promise<ReporterIdentity | null> {
       authToken,
       verifiedAt: metadata.verifiedAt,
     };
-  } catch (error) {
+  } catch {
     throw new SecurityVaultError('Failed to read reporter identity from secure vault.');
   }
 }
@@ -127,7 +127,7 @@ export async function getReporterIdentity(): Promise<ReporterIdentity | null> {
 export async function getDecryptedNik(): Promise<string | null> {
   try {
     return await SecureStore.getItemAsync(VAULT_KEY_RAW_NIK, SECURE_STORE_OPTIONS);
-  } catch (error) {
+  } catch {
     throw new SecurityVaultError('Failed to retrieve citizen NIK from secure vault.');
   }
 }
@@ -142,7 +142,7 @@ export async function clearSecurityVault(): Promise<void> {
       SecureStore.deleteItemAsync(VAULT_KEY_AUTH_TOKEN, SECURE_STORE_OPTIONS),
       SecureStore.deleteItemAsync(VAULT_KEY_RAW_NIK, SECURE_STORE_OPTIONS),
     ]);
-  } catch (error) {
+  } catch {
     throw new SecurityVaultError('Failed to purge security vault.');
   }
 }

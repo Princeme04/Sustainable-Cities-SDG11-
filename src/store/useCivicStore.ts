@@ -4,13 +4,20 @@ import type {
   Coordinates,
   HazardZone,
   PermissionStatus,
+  RealtimeConnectionStatus,
   ReporterIdentity,
+  SyncBatchSummary,
 } from '../types/civic';
 import {
   getReporterIdentity,
   saveReporterCredentials,
   clearSecurityVault,
 } from '../services/security/secureVaultService';
+import {
+  flushPendingSyncQueue,
+  offlineSyncEngine,
+  persistReportToOfflineCache,
+} from '../services/offlineSyncEngine';
 
 const ONE_HOUR_MS = 3_600_000;
 const TWO_HOURS_MS = 7_200_000;
@@ -118,11 +125,13 @@ interface CivicState {
   userLocation: Coordinates | null;
   locationPermissionStatus: PermissionStatus;
   reports: CivicReport[];
-  reportsConnection: 'connecting' | 'live' | 'offline';
+  reportsConnection: RealtimeConnectionStatus;
   hazardZones: HazardZone[];
   reporterIdentity: ReporterIdentity | null;
   isVaultUnlocked: boolean;
   isOfflineMode: boolean;
+  isSyncingQueue: boolean;
+  lastSyncedAt: number | null;
   pendingSyncQueue: CivicReport[];
 }
 
@@ -135,13 +144,15 @@ interface CivicActions {
   logoutAndPurgeVault: () => Promise<void>;
   enqueueOfflineReport: (report: CivicReport) => void;
   markReportSynced: (reportId: string) => void;
+  markReportSyncFailed: (reportId: string) => void;
+  flushOfflineQueue: () => Promise<SyncBatchSummary>;
   setOfflineMode: (status: boolean) => void;
-  setReportsConnection: (status: CivicState['reportsConnection']) => void;
+  setReportsConnection: (status: RealtimeConnectionStatus) => void;
 }
 
 export type CivicStore = CivicState & CivicActions;
 
-export const useCivicStore = create<CivicStore>((set) => ({
+export const useCivicStore = create<CivicStore>((set, get) => ({
   userLocation: null,
   locationPermissionStatus: 'undetermined',
   reports: MOCK_REPORTS,
@@ -150,6 +161,8 @@ export const useCivicStore = create<CivicStore>((set) => ({
   reporterIdentity: null,
   isVaultUnlocked: false,
   isOfflineMode: false,
+  isSyncingQueue: false,
+  lastSyncedAt: null,
   pendingSyncQueue: [],
 
   setUserLocation: (location) =>
@@ -159,7 +172,9 @@ export const useCivicStore = create<CivicStore>((set) => ({
     set({ locationPermissionStatus: status }),
 
   addReport: (report) =>
-    set((state) => ({ reports: [...state.reports.filter((item) => item.id !== report.id), report] })),
+    set((state) => ({
+      reports: [...state.reports.filter((item) => item.id !== report.id), report],
+    })),
 
   hydrateIdentityFromVault: async () => {
     try {
@@ -197,10 +212,21 @@ export const useCivicStore = create<CivicStore>((set) => ({
       ...report,
       syncStatus: 'PENDING_UPLOAD',
     };
+    void persistReportToOfflineCache(offlineReport);
     set((state) => ({
-      reports: [...state.reports, offlineReport],
-      pendingSyncQueue: [...state.pendingSyncQueue, offlineReport],
+      reports: [
+        ...state.reports.filter((item) => item.id !== offlineReport.id),
+        offlineReport,
+      ],
+      pendingSyncQueue: [
+        ...state.pendingSyncQueue.filter((item) => item.id !== offlineReport.id),
+        offlineReport,
+      ],
     }));
+
+    if (!get().isOfflineMode && get().reportsConnection !== 'offline') {
+      offlineSyncEngine.requestSyncFlush();
+    }
   },
 
   markReportSynced: (reportId) =>
@@ -211,17 +237,62 @@ export const useCivicStore = create<CivicStore>((set) => ({
       pendingSyncQueue: state.pendingSyncQueue.filter(
         (report) => report.id !== reportId,
       ),
+      lastSyncedAt: Date.now(),
     })),
 
-  setOfflineMode: (status) =>
-    set({ isOfflineMode: status }),
+  markReportSyncFailed: (reportId) =>
+    set((state) => ({
+      reports: state.reports.map((report) =>
+        report.id === reportId ? { ...report, syncStatus: 'FAILED' } : report,
+      ),
+    })),
 
-  setReportsConnection: (status) => set({ reportsConnection: status }),
+  flushOfflineQueue: async () => {
+    set({ isSyncingQueue: true });
+    try {
+      const summary = await flushPendingSyncQueue({
+        getPendingQueue: () => get().pendingSyncQueue,
+        isOfflineMode: () => get().isOfflineMode,
+        getConnectionStatus: () => get().reportsConnection,
+        onReportSynced: (reportId) => get().markReportSynced(reportId),
+        onReportFailed: (reportId) => get().markReportSyncFailed(reportId),
+      });
+      return summary;
+    } finally {
+      set({ isSyncingQueue: false });
+    }
+  },
+
+  setOfflineMode: (status) => {
+    set({
+      isOfflineMode: status,
+      reportsConnection: status ? 'offline' : get().reportsConnection,
+    });
+    if (!status) {
+      offlineSyncEngine.requestSyncFlush();
+    }
+  },
+
+  setReportsConnection: (status) => {
+    set({ reportsConnection: status });
+    if (status === 'live' || status === 'simulated') {
+      offlineSyncEngine.requestSyncFlush();
+    }
+  },
 }));
 
 // Precision selectors to prevent unnecessary component re-renders (16ms Mandate)
 export const usePendingSyncCount = () =>
   useCivicStore((state) => state.pendingSyncQueue.length);
+
+export const useIsSyncingQueue = () =>
+  useCivicStore((state) => state.isSyncingQueue);
+
+export const useLastSyncedAt = () =>
+  useCivicStore((state) => state.lastSyncedAt);
+
+export const useReportsConnection = () =>
+  useCivicStore((state) => state.reportsConnection);
 
 export const useReporterIdentity = () =>
   useCivicStore((state) => state.reporterIdentity);
